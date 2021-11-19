@@ -6,18 +6,26 @@
 package org.jetbrains.kotlin.ir.backend.py.transformers.irToPy
 
 import generated.Python.*
-import org.jetbrains.kotlin.ir.backend.py.utils.JsGenerationContext
+import org.jetbrains.kotlin.ir.backend.py.utils.LocalNameGenerator
+import org.jetbrains.kotlin.ir.backend.py.utils.PyGenerationContext
 import org.jetbrains.kotlin.ir.declarations.IrConstructor
 import org.jetbrains.kotlin.ir.declarations.IrFunction
 import org.jetbrains.kotlin.ir.expressions.IrMemberAccessExpression
 import org.jetbrains.kotlin.ir.expressions.IrVararg
 import org.jetbrains.kotlin.ir.util.isVararg
+import org.jetbrains.kotlin.ir.util.parentClassOrNull
+import org.jetbrains.kotlin.ir.visitors.acceptChildrenVoid
+import org.jetbrains.kotlin.ir.visitors.acceptVoid
 import org.jetbrains.kotlin.js.backend.ast.JsName
 
 fun expr.makeStmt(): stmt = Expr(value = this)
 
-fun translateFunction(declaration: IrFunction, funcName: JsName, context: JsGenerationContext): FunctionDef {
-    val functionContext = context.newDeclaration(declaration)  // todo: pass local name generator parameter
+fun translateFunction(declaration: IrFunction, funcName: JsName, context: PyGenerationContext): FunctionDef {
+    val localNameGenerator = LocalNameGenerator(context.localNames.variableNames).also {
+        declaration.acceptChildrenVoid(it)
+        declaration.parentClassOrNull?.thisReceiver?.acceptVoid(it)
+    }
+    val functionContext = context.newDeclaration(declaration, localNameGenerator)
 
     val isClassMethod = declaration.dispatchReceiverParameter != null
     val isConstructor = declaration is IrConstructor
@@ -74,7 +82,7 @@ fun translateFunction(declaration: IrFunction, funcName: JsName, context: JsGene
     )
 }
 
-fun translateCallArguments(expression: IrMemberAccessExpression<*>, context: JsGenerationContext, transformer: IrElementToPyExpressionTransformer): List<expr> {
+fun translateCallArguments(expression: IrMemberAccessExpression<*>, context: PyGenerationContext, transformer: IrElementToPyExpressionTransformer): List<expr> {
     val size = expression.valueArgumentsCount
 
     val arguments = (0 until size).mapTo(ArrayList(size)) { index ->
@@ -82,10 +90,6 @@ fun translateCallArguments(expression: IrMemberAccessExpression<*>, context: JsG
         val result = argument?.accept(transformer, context)
         if (result == null) {
             Name(id = identifier("translateCallArguments $index".toValidPythonSymbol()), ctx = Load)  // todo
-//            if (context.staticContext.backendContext.es6mode) return@mapTo JsPrefixOperation(JsUnaryOperator.VOID, JsIntLiteral(2))
-//
-//            assert(expression is IrFunctionAccessExpression && expression.symbol.owner.isExternalOrInheritedFromExternal())
-//            JsPrefixOperation(JsUnaryOperator.VOID, JsIntLiteral(1))
         } else if (argument is IrVararg) {
             Starred(value = result, ctx = Load)  // todo: it's not pretty to have *(1, 2, 3) -- we can flatten vararg here
         } else {
@@ -93,8 +97,5 @@ fun translateCallArguments(expression: IrMemberAccessExpression<*>, context: JsG
         }
     }
 
-//    return if (expression.symbol.isSuspend) {
-//        arguments + context.continuation
-//    } else arguments
     return arguments  // todo
 }

@@ -5,33 +5,26 @@
 
 package org.jetbrains.kotlin.ir.backend.py.transformers.irToPy
 
-import generated.Python.Module
-import generated.Python.stmt
+import generated.Python.*
 import org.jetbrains.kotlin.ir.backend.py.CompilerResult
-import org.jetbrains.kotlin.ir.backend.py.JsIrBackendContext
 import org.jetbrains.kotlin.ir.backend.py.PyCode
-import org.jetbrains.kotlin.ir.backend.py.eliminateDeadDeclarations
+import org.jetbrains.kotlin.ir.backend.py.PyIrBackendContext
 import org.jetbrains.kotlin.ir.backend.py.lower.StaticMembersLowering
 import org.jetbrains.kotlin.ir.backend.py.utils.*
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
+import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import topython.toPython
 
 // TODO
 class IrModuleToPyTransformer(
-    private val backendContext: JsIrBackendContext,
+    private val backendContext: PyIrBackendContext,
     private val mainArguments: List<String>?,
-    private val generateScriptModule: Boolean = false,
     var namer: NameTables = NameTables(emptyList()),
-    private val fullJs: Boolean = true,
-    private val dceJs: Boolean = false,
-    private val multiModule: Boolean = false,
-    private val relativeRequirePath: Boolean = false
 ) {
     fun generateModule(modules: Iterable<IrModuleFragment>): CompilerResult {
         val additionalPackages = with(backendContext) {
             externalPackageFragment.values + listOf(
                 bodilessBuiltInsPackageFragment,
-                intrinsics.externalPackageFragment
             ) + packageLevelJsModules
         }
 
@@ -39,64 +32,21 @@ class IrModuleToPyTransformer(
             module.files.forEach { StaticMembersLowering(backendContext).lower(it) }
         }
 
-        if (multiModule) {
-            breakCrossModuleFieldAccess(backendContext, modules)
-        }
-
         modules.forEach { module ->
             namer.merge(module.files, additionalPackages)
         }
 
-        val jsCode = if (fullJs) generateWrappedModuleBody(modules, namer) else null
-
-        val dceJsCode = if (dceJs) {
-            eliminateDeadDeclarations(modules, backendContext)
-            // Use a fresh namer for DCE so that we could compare the result with DCE-driven
-            // TODO: is this mode relevant for scripting? If yes, refactor so that the external name tables are used here when needed.
-            val namer = NameTables(emptyList())
-            namer.merge(modules.flatMap { it.files }, additionalPackages)
-            generateWrappedModuleBody(modules, namer)
-        } else null
-
-        return CompilerResult(jsCode, dceJsCode)
+        return CompilerResult(generateWrappedModuleBody(modules, namer))
     }
 
     private fun generateWrappedModuleBody(modules: Iterable<IrModuleFragment>, namer: NameTables): PyCode {
-        if (multiModule) {
-
-            val refInfo = buildCrossModuleReferenceInfo(modules)
-
-            val rM = modules.reversed()
-
-            val main = rM.first()
-            val others = rM.drop(1)
-
-            val mainModule = generateWrappedModuleBody2(
-                listOf(main),
+        return PyCode(
+            generateWrappedModuleBody2(
+                modules,
                 namer,
-                refInfo
+                EmptyCrossModuleReferenceInfo
             )
-
-            val dependencies = others.map { module ->
-                val moduleName = sanitizeName(module.safeName)
-
-                moduleName to generateWrappedModuleBody2(
-                    listOf(module),
-                    namer,
-                    refInfo
-                )
-            }.reversed()
-
-            return PyCode(mainModule, dependencies)
-        } else {
-            return PyCode(
-                generateWrappedModuleBody2(
-                    modules,
-                    namer,
-                    EmptyCrossModuleReferenceInfo
-                )
-            )
-        }
+        )
     }
 
     private fun generateWrappedModuleBody2(
@@ -109,31 +59,93 @@ class IrModuleToPyTransformer(
             IrNamerImpl(newNameTables = namer, backendContext),
             modules
         )
-        val staticContext = JsStaticContext(
+        val staticContext = PyStaticContext(
             backendContext = backendContext,
             irNamer = nameGenerator,
-            globalNameScope = namer.globalNames
         )
-        val rootContext = JsGenerationContext(
+        val rootContext = PyGenerationContext(
             currentFunction = null,
             staticContext = staticContext,
             localNames = LocalNameGenerator(NameScope.EmptyScope)
         )
 
+        val callToMain = generateCallToMain(modules)
+        val imports = generateImports()
+
         val moduleBody = generateModuleBody(modules, rootContext)
         val program = Module(
             body = moduleBody,
             type_ignores = emptyList(),
-        )
+        ).let {
+            it.copy(body = imports + it.body + callToMain)
+        }
 
         return program.toPython()
     }
 
-    private fun generateModuleBody(modules: Iterable<IrModuleFragment>, context: JsGenerationContext): List<stmt> {
-        return modules.flatMap { module: IrModuleFragment ->
-            module.files.flatMap {
-                it.accept(IrFileToPyTransformer(), context)
+    private fun generateImports() =
+        listOf(
+            // Needed to support passing arguments for 'main' function.
+            Import(names = listOf(aliasImpl(name = identifier("sys"), asname = null))),
+        )
+
+    private fun generateModuleBody(modules: Iterable<IrModuleFragment>, context: PyGenerationContext): List<stmt> {
+        // todo: supporting inserting splitting comments as in JS would be handy
+
+        val statements = mutableListOf<stmt>()
+
+        modules.forEach { module: IrModuleFragment ->
+            module.files.forEach {
+                statements += it.accept(IrFileToPyTransformer(), context)
             }
         }
+
+        statements += context.staticContext.initializerBlock
+
+        return statements
+    }
+
+    private fun generateMainArguments(mainFunction: IrSimpleFunction): List<expr> {
+        val retrieveArgumentsFromSystem = if (mainFunction.valueParameters.isNotEmpty()) {
+            Subscript(
+                value = Attribute(
+                    value = Name(identifier("sys"), ctx = Load),
+                    attr = identifier("argv"),
+                    ctx = Load,
+                ),
+                slice = Slice(
+                    lower = Constant(value = constant("1"), kind = null),
+                    upper = null,
+                    step = null,
+                ),
+                ctx = Load,
+            )
+        } else null
+        return listOfNotNull(retrieveArgumentsFromSystem)
+    }
+
+    private fun generateCallToMain(modules: Iterable<IrModuleFragment>): List<stmt> {
+        if (mainArguments == null) return emptyList() // in case `NO_MAIN` and `main(..)` exists
+        val mainFunction = JsMainFunctionDetector.getMainFunctionOrNull(modules.last())
+        return mainFunction?.let {
+            // TODO handle arguments
+            listOf(
+                If(
+                    test = Compare(
+                        left = Name(id = identifier("__name__"), ctx = Load),
+                        ops = listOf(Eq),
+                        comparators = listOf(Constant(value = constant("\"__main__\""), kind = null)),
+                    ),
+                    body = listOf(
+                        Call(
+                            func = Name(id = identifier("main"), ctx = Load),
+                            args = generateMainArguments(it),
+                            keywords = emptyList(),
+                        ).makeStmt(),
+                    ),
+                    orelse = emptyList(),
+                ),
+            )
+        } ?: emptyList()
     }
 }

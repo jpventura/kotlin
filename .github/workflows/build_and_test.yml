@@ -1,69 +1,131 @@
+# This file was generated using Kotlin DSL (.github/workflows/_generate_workflows.main.kts).
+# If you want to modify the workflow, please change the Kotlin file and regenerate this YAML file.
+# Generated with https://github.com/krzema12/github-actions-kotlin-dsl
+
 name: Build and test
 
 on:
   push:
-    branches: [ python-backend ]
-  pull_request:
-    branches: [ python-backend ]
+  workflow_dispatch:
 
 jobs:
-  build_and_test:
-    runs-on: ubuntu-latest
+  "check_yaml_consistency":
+    runs-on: "ubuntu-latest"
     steps:
-      - name: Check out
+      - id: step-0
+        name: Check out
+        uses: actions/checkout@v3
+      - id: step-1
+        name: Install Kotlin
+        run: sudo snap install --classic kotlin
+      - id: step-2
+        name: Execute script
+        run: rm '.github/workflows/build_and_test.yml' && '.github/workflows/_generate_workflows.main.kts'
+      - id: step-3
+        name: Consistency check
+        run: git diff --exit-code '.github/workflows/build_and_test.yml'
+  "build_and_test":
+    runs-on: "ubuntu-latest"
+    needs:
+      - "check_yaml_consistency"
+    strategy:
+      matrix:
+        testTask:
+          - pythonTest
+          - microPythonTest
+    steps:
+      - id: step-0
+        name: Fetch the whole git history (to be able to calculate some stats based on it)
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0 # Fetch the whole git history, to be able to calculate some stats based on it.
-      - name: Install Kotlin for scripting
+          fetch-depth: 0
+      - id: step-1
+        name: Install Kotlin for scripting
         run: sudo snap install --classic kotlin
-      - name: Clean
+      - id: step-2
+        name: Install MicroPython
+        run: sudo snap install micropython
+        if: ${{ matrix.testTask == 'microPythonTest' }}
+      - id: step-3
+        name: Disable old Java for Kotlin
+        run: echo "kotlin.build.isObsoleteJdkOverrideEnabled=true" > local.properties
+      - id: step-4
+        name: Clean
         run: JDK_9="$JAVA_HOME" ./gradlew clean
-      - name: Run ast tests
+      - id: step-5
+        name: Run ast tests
         run: JDK_9="$JAVA_HOME" ./gradlew :python:ast:test
-      - name: Build
+        if: always()
+      - id: step-6
+        name: Build
         run: JDK_9="$JAVA_HOME" ./gradlew dist
-
-      - name: Compile python.kt to Python
-        run: dist/kotlinc/bin/kotlinc-py -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -output out_ir.py python/experiments/python.kt
+      - id: step-7
+        name: Compile python.kt to Python
+        run: |
+          dist/kotlinc/bin/kotlinc-py \
+          -libraries dist/kotlinc/lib/kotlin-stdlib-py-js.klib \
+          -Xir-produce-py \
+          -output out_ir.py \
+          python/experiments/python.kt
         if: always()
-      - name: Compare out_ir.py
-        run: diff -u out_ir.py python/experiments/out_ir.py
+      - id: step-8
+        name: Compare out_ir.py
+        run: diff -u out_ir.py python/experiments/generated/out_ir.py
         if: always()
-
-      - name: Compile python.kt to JavaScript
-        run: dist/kotlinc/bin/kotlinc-js -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -Xir-property-lazy-initialization -output out-ir.js python/experiments/python.kt
+      - id: step-9
+        name: Compile python.kt to JavaScript
+        run: |
+          dist/kotlinc/bin/kotlinc-js \
+          -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar \
+          -Xir-produce-js \
+          -Xir-property-lazy-initialization \
+          -output out-ir.js \
+          python/experiments/python.kt
         if: always()
-      - name: Compare out-ir.js
-        run: diff -u out-ir.js python/experiments/out-ir.js
+      - id: step-10
+        name: Compare out-ir.js
+        run: diff -u out-ir.js python/experiments/generated/out-ir.js
         if: always()
-
-      - name: Generate stats about missing IR mapping
-        run: less python/experiments/out_ir.py | grep -Po "visit[a-zA-Z0-9_]+" | sort | uniq -c | sort -nr > missing.txt
+      - id: step-11
+        name: Generate stats about missing IR mapping
+        run: |
+          less python/experiments/generated/out_ir.py \
+          | grep -Po "visit[a-zA-Z0-9_]+" \
+          | sort \
+          | uniq -c \
+          | sort -nr \
+          > missing.txt
         if: always()
-      - name: Compare missing.txt
-        run: diff -u missing.txt python/experiments/missing.txt
+      - id: step-12
+        name: Compare missing.txt
+        run: diff -u missing.txt python/experiments/generated/missing.txt
         if: always()
-
-      - name: Run end-to-end tests
+      - id: step-13
+        name: Run end-to-end tests
         run: JDK_9="$JAVA_HOME" python/e2e-tests/run.sh
+        if: ${{ matrix.testTask == 'pythonTest' }}
+      - id: step-14
+        name: Run box tests (succeed even if they fail)
+        run: JDK_9="$JAVA_HOME" ./gradlew :python:box.tests:${{ matrix.testTask }} || true
         if: always()
-
-      - name: Run box tests (succeed even if they fail)
-        run: JDK_9="$JAVA_HOME" ./gradlew :python:box.tests:pythonTest || true
+      - id: step-15
+        name: Generate box tests reports
+        run: |
+          python/experiments/generate-box-tests-reports.main.kts \
+          --test-task=${{ matrix.testTask }} \
+          --failed-tests-report-path=failed-tests.txt \
+          --box-tests-report-path=box-tests-report.tsv \
+          --failure-count-report-path=failure-count.tsv
         if: always()
-      - name: Generate box tests reports
-        run: python/experiments/generate-box-tests-reports.main.kts --failed-tests-report-path=failed-tests.txt --box-tests-report-path=box-tests-report.tsv --failure-count-report-path=failure-count.tsv --git-history-plot-path=git-history-plot.svg
+      - id: step-16
+        name: Compare failed-tests.txt
+        run: diff -u failed-tests.txt python/box.tests/reports/${{ matrix.testTask }}/failed-tests.txt
         if: always()
-      - name: Compare failed-tests.txt
-        run: diff -u failed-tests.txt python/experiments/failed-tests.txt
+      - id: step-17
+        name: Compare box-tests-report.tsv
+        run: diff -u box-tests-report.tsv python/box.tests/reports/${{ matrix.testTask }}/box-tests-report.tsv
         if: always()
-      - name: Compare box-tests-report.tsv
-        run: diff -u box-tests-report.tsv python/experiments/box-tests-report.tsv
+      - id: step-18
+        name: Compare failure-count.tsv
+        run: diff -u failure-count.tsv python/box.tests/reports/${{ matrix.testTask }}/failure-count.tsv
         if: always()
-      - name: Compare failure-count.tsv
-        run: diff -u failure-count.tsv python/experiments/failure-count.tsv
-        if: always()
-#      - name: Compare git-history-plot.svg
-#        # Processing with 'sed' is needed to remove random parts in the SVGs.
-#        run: diff -u <(cat git-history-plot.svg | sed "s/url(#[A-Za-z0-9]*)//" | sed "s/clipPath id=\"[A-Za-z0-9]*\"//") <(cat python/experiments/git-history-plot.svg  | sed "s/url(#[A-Za-z0-9]*)//" | sed "s/clipPath id=\"[A-Za-z0-9]*\"//")
-#        if: always()

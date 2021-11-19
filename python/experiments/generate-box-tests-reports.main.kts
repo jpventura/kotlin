@@ -4,6 +4,7 @@
 @file:DependsOn("org.jetbrains.lets-plot:lets-plot-kotlin-jvm:3.0.2")
 @file:DependsOn("io.github.microutils:kotlin-logging:1.12.5") // To fix missing runtime dependency.
 
+import jetbrains.datalore.plot.base.render.svg.SvgUID
 import jetbrains.letsPlot.export.ggsave
 import jetbrains.letsPlot.geom.geomPoint
 import jetbrains.letsPlot.geom.geomStep
@@ -26,19 +27,24 @@ import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.text.Charsets.UTF_8
 
 fun pathFromNamedArgument(argumentName: String): Path? =
+    stringFromNamedArgument(argumentName)?.let { Paths.get(it) }
+
+fun stringFromNamedArgument(argumentName: String): String? =
     args.firstOrNull { it.startsWith("--$argumentName=") }
-        ?.let { Paths.get(it.split("=")[1]) }
+        ?.let { it.split("=")[1] }
 
+val testTask: String = stringFromNamedArgument("test-task")
+    ?: "pythonTest".also { println("'test-task' parameter is missing, using default 'pythonTest'") }
 val targetFailedTestsReportPath: Path = pathFromNamedArgument("failed-tests-report-path")
-    ?: Paths.get("python/experiments/failed-tests.txt")
+    ?: Paths.get("python/box.tests/reports/$testTask/failed-tests.txt")
 val targetBoxTestsReportPath: Path = pathFromNamedArgument("box-tests-report-path")
-    ?: Paths.get("python/experiments/box-tests-report.tsv")
+    ?: Paths.get("python/box.tests/reports/$testTask/box-tests-report.tsv")
 val failureCountReportPath: Path = pathFromNamedArgument("failure-count-report-path")
-    ?: Paths.get("python/experiments/failure-count.tsv")
+    ?: Paths.get("python/box.tests/reports/$testTask/failure-count.tsv")
 val gitHistoryPlotPath: Path = pathFromNamedArgument("git-history-plot-path")
-    ?: Paths.get("python/experiments/git-history-plot.svg")
+    ?: Paths.get("python/box.tests/reports/git-history-plot.svg")
 
-val testResults = getTestResults(Paths.get("python/box.tests/build/test-results/pythonTest"))
+val testResults = getTestResults(Paths.get("python/box.tests/build/test-results/$testTask"))
 
 testResults.writeFailedTestsSummary(targetFailedTestsReportPath)
 testResults.writeSummaryTsvToFile(targetBoxTestsReportPath)
@@ -76,8 +82,11 @@ fun List<TestResult>.writeSummaryTsvToFile(targetFile: Path) = targetFile.toFile
                     if (failureGeneralReason == FailureGeneralReason.PythonExecution) testResult.status.message.extractDuration() else null,
                 )
             } else Triple(null, null, null)
+
+        fun String.makeEasyPastableToGradle() = replace(" > ", ".")
+
         out.println(listOf(
-            testResult.name,
+            testResult.name.makeEasyPastableToGradle(),
             statusAsString,
 //            testResult.timeSeconds,
             failureGeneralReason ?: "",
@@ -113,6 +122,8 @@ fun String.removeVaryingParts() =
         .replace(Regex("\\S+\\.py"), "<path-truncated>")
         .replace(Regex("@[a-f0-9]{1,8}"), "@...")
         .replace(Regex("0x[a-f0-9]{12}"), "[address]")
+        .replace(Regex("allocating \\d+ .*"), "allocating XXX bytes")
+        .replace(Regex("object at [a-f0-9]{1,12}"), "object at [address]")
 
 fun TestStatus.extractFailureGeneralReason(): FailureGeneralReason? {
     return if (this is TestStatus.Failed) {
@@ -232,7 +243,8 @@ fun generateGitHistoryPlot(gitHistoryPlotPath: Path) {
     data class DataPoint(
         val date: Date,
         val testsAll: Int,
-        val testsPassed: Int,
+        val testsPassedPython: Int,
+        val testsPassedMicroPython: Int?,
     )
 
     val git = Git.open(File("."))
@@ -244,33 +256,45 @@ fun generateGitHistoryPlot(gitHistoryPlotPath: Path) {
         .filter {
             val numberOfAllTests = git.repository.getNumberOfAllTests(it.tree)
             val numberOfAllTestsPrev = git.repository.getNumberOfAllTests(it.parents[0].tree)
-            val numberOfFailedTests = git.repository.getNumberOfFailedTests(it.tree)
-            val numberOfFailedTestsPrev = git.repository.getNumberOfFailedTests(it.parents[0].tree)
+            val numberOfFailedPythonTests = git.repository.getNumberOfFailedTests(it.tree, "pythonTest")
+            val numberOfFailedPythonTestsPrev = git.repository.getNumberOfFailedTests(it.parents[0].tree, "pythonTest")
+            val numberOfFailedMicroPythonTests = git.repository.getNumberOfFailedTests(it.tree, "microPythonTest")
+            val numberOfFailedMicroPythonTestsPrev = git.repository.getNumberOfFailedTests(it.parents[0].tree, "microPythonTest")
 
-            numberOfAllTests != numberOfAllTestsPrev || numberOfFailedTests != numberOfFailedTestsPrev
+            numberOfAllTests != numberOfAllTestsPrev || numberOfFailedPythonTests != numberOfFailedPythonTestsPrev ||
+                    numberOfFailedMicroPythonTests != numberOfFailedMicroPythonTestsPrev
         }
         .groupBy { Instant.ofEpochSecond(it.commitTime.toLong()).truncatedTo(ChronoUnit.DAYS) }
         .mapNotNull { it.value.lastOrNull() }
         .mapNotNull {
             val instant = Instant.ofEpochSecond(it.commitTime.toLong())
-            val numberOfFailedTests = git.repository.getNumberOfFailedTests(it.tree)
+            val numberOfFailedTestsPython = git.repository.getNumberOfFailedTests(it.tree, "pythonTest")
+            val numberOfFailedTestsMicroPython = git.repository.getNumberOfFailedTests(it.tree, "microPythonTest")
             val numberOfAllTests = git.repository.getNumberOfAllTests(it.tree)
-            if (numberOfAllTests != null && numberOfFailedTests != null) {
-                val numberOfPassedTests = numberOfAllTests - numberOfFailedTests
+            if (numberOfAllTests != null && numberOfFailedTestsPython != null) {
+                val numberOfPassedTestsPython = numberOfAllTests - numberOfFailedTestsPython
+                val numberOfPassedTestsMicroPython = if (numberOfFailedTestsMicroPython != null) {
+                    numberOfAllTests - numberOfFailedTestsMicroPython
+                } else {
+                    null
+                }
                 DataPoint(
                     date = Date.from(instant),
                     testsAll = numberOfAllTests,
-                    testsPassed = numberOfPassedTests,
+                    testsPassedPython = numberOfPassedTestsPython,
+                    testsPassedMicroPython = numberOfPassedTestsMicroPython,
                 )
             } else {
                 null
             }
         }
 
+    SvgUID.setUpForTest()  // make the svg deterministic as discussed here: https://github.com/JetBrains/lets-plot/issues/492
+
     val dataForPlot = mapOf(
-        "date" to data.map { it.date } + data.map { it.date },
-        "tests" to data.map { it.testsAll } + data.map { it.testsPassed },
-        "type" to List(data.size) { "all" } + List(data.size) { "passed" },
+        "date" to data.map { it.date } + data.map { it.date } + data.map { it.date },
+        "tests" to data.map { it.testsAll } + data.map { it.testsPassedPython } + data.map { it.testsPassedMicroPython },
+        "type" to List(data.size) { "all" } + List(data.size) { "passed (Python)" } + List(data.size) { "passed (MicroPython)" },
     )
     val p = letsPlot(dataForPlot) { x = "date"; y = "tests"; color = "type" } +
             geomStep() +
@@ -282,8 +306,16 @@ fun generateGitHistoryPlot(gitHistoryPlotPath: Path) {
     ggsave(p, gitHistoryPlotPath.fileName.toString(), path = gitHistoryPlotPath.parent?.toString() ?: ".")
 }
 
-fun Repository.getNumberOfFailedTests(tree: RevTree) =
-    readFileAsText(tree, Paths.get("python/experiments/failed-tests.txt"))?.lines()?.size
+fun Repository.getNumberOfFailedTests(tree: RevTree, testTask: String): Int? {
+    // Trying two paths, to be able to fetch number of failed tests for various file layouts that the repository had.
+    val failedTestsFile = if (testTask == "pythonTest") {
+        readFileAsText(tree, Paths.get("python/experiments/failed-tests.txt"))
+            ?: readFileAsText(tree, Paths.get("python/box.tests/reports/pythonTest/failed-tests.txt"))
+    } else {
+        readFileAsText(tree, Paths.get("python/box.tests/reports/$testTask/failed-tests.txt"))
+    }
+    return failedTestsFile?.lines()?.size
+}
 
 fun Repository.getNumberOfAllTests(tree: RevTree): Int? {
     val readme = readFileAsText(tree, Paths.get("python/README.md")) ?: return null
@@ -292,6 +324,9 @@ fun Repository.getNumberOfAllTests(tree: RevTree): Int? {
     return allTests.toInt()
 }
 
+/**
+ * @return [null] if the file does not exist.
+ */
 fun Repository.readFileAsText(tree: RevTree, path: Path): String? {
     val treeWalk = TreeWalk.forPath(this, path.toString(), tree) ?: return null
     val objectId = treeWalk.getObjectId(0)

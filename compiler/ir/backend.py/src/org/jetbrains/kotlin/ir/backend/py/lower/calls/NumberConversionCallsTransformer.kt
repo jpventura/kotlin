@@ -5,13 +5,13 @@
 
 package org.jetbrains.kotlin.ir.backend.py.lower.calls
 
-import org.jetbrains.kotlin.ir.backend.py.JsIrBackendContext
+import org.jetbrains.kotlin.ir.backend.py.PyIrBackendContext
 import org.jetbrains.kotlin.ir.backend.py.ir.JsIrBuilder
 import org.jetbrains.kotlin.ir.backend.py.utils.ConversionNames
 import org.jetbrains.kotlin.ir.expressions.IrExpression
 import org.jetbrains.kotlin.ir.expressions.IrFunctionAccessExpression
 
-class NumberConversionCallsTransformer(context: JsIrBackendContext) : CallsTransformer {
+class NumberConversionCallsTransformer(context: PyIrBackendContext) : CallsTransformer {
     private val intrinsics = context.intrinsics
     private val irBuiltIns = context.irBuiltIns
 
@@ -20,12 +20,8 @@ class NumberConversionCallsTransformer(context: JsIrBackendContext) : CallsTrans
         // TODO: Add Char and Number conversions
 
         irBuiltIns.byteType.let {
-//            add(it, ConversionNames.TO_BYTE, ::useDispatchReceiver)
             add(it, ConversionNames.TO_DOUBLE, ::useDispatchReceiver)
             add(it, ConversionNames.TO_FLOAT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_INT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_SHORT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_LONG, ::useDispatchReceiver)
         }
 
         for (type in listOf(irBuiltIns.floatType, irBuiltIns.doubleType)) {
@@ -38,21 +34,13 @@ class NumberConversionCallsTransformer(context: JsIrBackendContext) : CallsTrans
         }
 
         irBuiltIns.intType.let {
-//            add(it, ConversionNames.TO_BYTE, ::useDispatchReceiver)
             add(it, ConversionNames.TO_DOUBLE, ::useDispatchReceiver)
             add(it, ConversionNames.TO_FLOAT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_INT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_SHORT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_LONG, ::useDispatchReceiver)
         }
 
         irBuiltIns.shortType.let {
-//            add(it, ConversionNames.TO_BYTE, ::useDispatchReceiver)
             add(it, ConversionNames.TO_DOUBLE, ::useDispatchReceiver)
             add(it, ConversionNames.TO_FLOAT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_INT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_SHORT, ::useDispatchReceiver)
-//            add(it, ConversionNames.TO_LONG, ::useDispatchReceiver)
         }
 
 

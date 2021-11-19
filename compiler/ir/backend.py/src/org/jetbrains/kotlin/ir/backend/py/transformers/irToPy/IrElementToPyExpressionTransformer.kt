@@ -13,19 +13,20 @@ import org.jetbrains.kotlin.ir.declarations.IrSimpleFunction
 import org.jetbrains.kotlin.ir.declarations.IrValueParameter
 import org.jetbrains.kotlin.ir.declarations.IrVariable
 import org.jetbrains.kotlin.ir.expressions.*
+import org.jetbrains.kotlin.ir.types.*
 import org.jetbrains.kotlin.ir.util.isEffectivelyExternal
 import org.jetbrains.kotlin.ir.util.isFunctionTypeOrSubtype
 import org.jetbrains.kotlin.ir.util.parentAsClass
 import org.jetbrains.kotlin.util.OperatorNameConventions
 
 @Suppress("PARAMETER_NAME_CHANGED_ON_OVERRIDE")
-class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr, JsGenerationContext> {
+class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr, PyGenerationContext> {
 
-    override fun visitVararg(expression: IrVararg, context: JsGenerationContext): expr {
+    override fun visitVararg(expression: IrVararg, context: PyGenerationContext): expr {
         return Tuple(elts = expression.elements.map { it.accept(this, context) }, ctx = Load)
     }
 
-    override fun visitExpression(expression: IrExpression, data: JsGenerationContext): expr {
+    override fun visitExpression(expression: IrExpression, data: PyGenerationContext): expr {
         // TODO
         return when (expression) {
             is IrConst<*> -> visitConst(expression, data)
@@ -37,28 +38,20 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
             is IrWhen -> visitWhen(expression, data)
             is IrConstructorCall -> visitConstructorCall(expression, data)
             is IrTypeOperatorCall -> visitTypeOperator(expression, data)
-//            is IrBlock -> visitBlock(expression, data)
             is IrVararg -> visitVararg(expression, data)
             is IrDynamicOperatorExpression -> visitDynamicOperatorExpression(expression, data)
             is IrDynamicMemberExpression -> visitDynamicMemberExpression(expression, data)
             is IrStringConcatenation -> visitStringConcatenation(expression, data)
             is IrFunctionExpression -> visitFunctionExpression(expression, data)
             is IrRawFunctionReference -> visitRawFunctionReference(expression, data)
+            is IrFunctionReference -> visitFunctionReference(expression, data)
             else -> Name(id = identifier("visitExpression-other $expression".toValidPythonSymbol()), ctx = Load)
         }
     }
 
-//    override fun visitBlock(expression: IrBlock, data: JsGenerationContext): expr {
-//        // TODO
-//        return Name(id = identifier("visitBlock $expression"), ctx = Load)
-//    }
+    override fun visitExpressionBody(body: IrExpressionBody, context: PyGenerationContext): expr = body.expression.accept(this, context)
 
-    override fun visitExpressionBody(body: IrExpressionBody, context: JsGenerationContext): expr {
-        // TODO
-        return Name(id = identifier("visitExpressionBody $body".toValidPythonSymbol()), ctx = Load)
-    }
-
-    override fun visitFunctionExpression(expression: IrFunctionExpression, context: JsGenerationContext): expr {
+    override fun visitFunctionExpression(expression: IrFunctionExpression, context: PyGenerationContext): expr {
         // TODO: create lowering: if there is one statement, use IrExpressionBody, otherwise, create a _no_name_provided_function_ and call it.
         //       for now, the code doesn't support some cases
 
@@ -104,7 +97,7 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
         )
     }
 
-    override fun <T> visitConst(expression: IrConst<T>, context: JsGenerationContext): expr {
+    override fun <T> visitConst(expression: IrConst<T>, context: PyGenerationContext): expr {
         return when (val kind = expression.kind) {
             is IrConstKind.String -> Constant(
                 value = constant(value = "'${kind.valueOf(expression).replace("'", "\\'")}'"),
@@ -147,7 +140,7 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
         }
     }
 
-    override fun visitStringConcatenation(expression: IrStringConcatenation, context: JsGenerationContext): expr {
+    override fun visitStringConcatenation(expression: IrStringConcatenation, context: PyGenerationContext): expr {
         return expression
             .arguments
             .map { argument ->
@@ -159,42 +152,43 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
             .reduce { left, right -> BinOp(left = left, op = Add, right = right) }
     }
 
-    override fun visitGetField(expression: IrGetField, context: JsGenerationContext): expr {
+    override fun visitGetField(expression: IrGetField, context: PyGenerationContext): expr {
         // TODO
         val field = expression.symbol.owner
         val receiverExpression = expression.receiver?.accept(this, context)
 
         return if (receiverExpression != null) {
-            Attribute(value = receiverExpression, attr = identifier(expression.symbol.owner.name.asString().toValidPythonSymbol()), ctx = Store)
+            Attribute(value = receiverExpression, attr = identifier(field.name.asString().toValidPythonSymbol()), ctx = Store)
         } else {
-            Name(id = identifier(field.name.asString().toValidPythonSymbol()), ctx = Load)
+            Name(id = identifier(context.getNameForField(field).ident.toValidPythonSymbol()), ctx = Load)
         }
     }
 
-    override fun visitGetValue(expression: IrGetValue, context: JsGenerationContext): expr {
+    override fun visitGetValue(expression: IrGetValue, context: PyGenerationContext): expr {
         // TODO
         return when (val owner = expression.symbol.owner) {
-            is IrValueParameter, is IrVariable -> Name(id = identifier(owner.name.asString().toValidPythonSymbol().toPythonSpecific()), ctx = Load)
+            is IrVariable -> Name(id = identifier(context.getNameForValueDeclaration(owner).ident.toValidPythonSymbol()), ctx = Load)
+            is IrValueParameter -> Name(id = identifier(owner.name.asString().toValidPythonSymbol().toPythonSpecific()), ctx = Load)
             else -> Name(id = identifier("visitGetValue_other $owner".toValidPythonSymbol()), ctx = Load)
         }
     }
 
-    override fun visitGetObjectValue(expression: IrGetObjectValue, context: JsGenerationContext): expr {
+    override fun visitGetObjectValue(expression: IrGetObjectValue, context: PyGenerationContext): expr {
         val field = expression.symbol.owner
         return Name(id = identifier(field.name.asString().toValidPythonSymbol()), ctx = Load)
     }
 
-    override fun visitSetField(expression: IrSetField, context: JsGenerationContext): expr {
+    override fun visitSetField(expression: IrSetField, context: PyGenerationContext): expr {
         // TODO
         return Name(id = identifier("visitSetField_expression $expression".toValidPythonSymbol()), ctx = Load)
     }
 
-    override fun visitSetValue(expression: IrSetValue, context: JsGenerationContext): expr {
+    override fun visitSetValue(expression: IrSetValue, context: PyGenerationContext): expr {
         // TODO
         return Name(id = identifier("visitSetValue-inToPyExpressionTransformer $expression".toValidPythonSymbol()), ctx = Load)
     }
 
-    override fun visitDelegatingConstructorCall(expression: IrDelegatingConstructorCall, context: JsGenerationContext): expr {
+    override fun visitDelegatingConstructorCall(expression: IrDelegatingConstructorCall, context: PyGenerationContext): expr {
         // compile `super(arg1, arg2, arg...)` as `SuperClassName.__init__(self, arg1, arg2, arg...)`
         val function = expression.symbol.owner
         val arguments = translateCallArguments(expression, context, this)
@@ -217,7 +211,7 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
         )
     }
 
-    override fun visitConstructorCall(expression: IrConstructorCall, context: JsGenerationContext): expr {
+    override fun visitConstructorCall(expression: IrConstructorCall, context: PyGenerationContext): expr {
         val function = expression.symbol.owner
         val arguments = translateCallArguments(expression, context, this)
         val klass = function.parentAsClass
@@ -234,7 +228,7 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
         )
     }
 
-    override fun visitCall(expression: IrCall, context: JsGenerationContext): expr {
+    override fun visitCall(expression: IrCall, context: PyGenerationContext): expr {
         // TODO
         fun isFunctionTypeInvoke(receiver: expr?, call: IrCall): Boolean {
             if (receiver == null) return false
@@ -265,7 +259,6 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
                 val name = Name(id = identifier(context.getNameForProperty(property).ident.toValidPythonSymbol()), ctx = Load)
                 return when (function) {
                     property.getter -> name
-//                    property.setter -> Assign(targets = listOf(name), value = arguments.single(), type_comment = null)
                     // todo: this is a statement but an expression is required
                     property.setter -> Name(id = identifier("visitCall set ${context.getNameForProperty(property).ident.toValidPythonSymbol()}"), ctx = Load)
                     else -> error("Function must be an accessor of corresponding property")
@@ -304,7 +297,7 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
         }
     }
 
-    override fun visitWhen(expression: IrWhen, context: JsGenerationContext): expr {
+    override fun visitWhen(expression: IrWhen, context: PyGenerationContext): expr {
         return expression
             .branches
             .map { branch ->
@@ -334,19 +327,27 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
             }
     }
 
-    override fun visitTypeOperator(expression: IrTypeOperatorCall, data: JsGenerationContext): expr {
-        // TODO
+    override fun visitTypeOperator(expression: IrTypeOperatorCall, data: PyGenerationContext): expr {
+        // TODO: take a look how JS performs here: much easier, looks like in most cases call is just omitted and just the argument is used
+        val type = expression.typeOperand
+        val funcName = when {
+            type.isDouble() || type.isFloat() -> "float"
+            type.isString() -> "str"
+            type.isAny() || type.isNullableAny() -> ""  // todo: get rid of this hack
+            else -> type.asString().toValidPythonSymbol()
+        }
+
         return when (expression.operator) {
             IrTypeOperator.REINTERPRET_CAST -> Call(
-                func = Name(id = identifier(expression.typeOperand.asString().toValidPythonSymbol()), ctx = Load),
+                func = Name(id = identifier(funcName), ctx = Load),
                 args = listOf(visitExpression(expression.argument, data)),
                 keywords = emptyList(),
             )
-            else -> Name(id = identifier("visitTypeOperator ${expression.operator}".toValidPythonSymbol()), ctx = Load)
+            else -> Name(id = identifier("visitTypeOperator $funcName".toValidPythonSymbol()), ctx = Load)
         }
     }
 
-    override fun visitDynamicMemberExpression(expression: IrDynamicMemberExpression, data: JsGenerationContext): expr {
+    override fun visitDynamicMemberExpression(expression: IrDynamicMemberExpression, data: PyGenerationContext): expr {
         return Attribute(
             expression.receiver.accept(this, data),
             identifier(expression.memberName.toValidPythonSymbol()),
@@ -354,17 +355,17 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
         )
     }
 
-    override fun visitDynamicOperatorExpression(expression: IrDynamicOperatorExpression, data: JsGenerationContext): expr {
-        fun prefixOperation(op: unaryop, expression: IrDynamicOperatorExpression, data: JsGenerationContext) =
+    override fun visitDynamicOperatorExpression(expression: IrDynamicOperatorExpression, data: PyGenerationContext): expr {
+        fun prefixOperation(op: unaryop, expression: IrDynamicOperatorExpression, data: PyGenerationContext) =
             UnaryOp(op, expression.receiver.accept(this, data))
 
-        fun binaryOperation(op: operator, expression: IrDynamicOperatorExpression, data: JsGenerationContext) =
+        fun binaryOperation(op: operator, expression: IrDynamicOperatorExpression, data: PyGenerationContext) =
             BinOp(expression.left.accept(this, data), op, expression.right.accept(this, data))
 
-        fun binaryOperation(op: cmpop, expression: IrDynamicOperatorExpression, data: JsGenerationContext) =
+        fun binaryOperation(op: cmpop, expression: IrDynamicOperatorExpression, data: PyGenerationContext) =
             Compare(expression.left.accept(this, data), listOf(op), listOf(expression.right.accept(this, data)))
 
-        fun binaryOperation(op: boolop, expression: IrDynamicOperatorExpression, data: JsGenerationContext) =
+        fun binaryOperation(op: boolop, expression: IrDynamicOperatorExpression, data: PyGenerationContext) =
             BoolOp(op, listOf(expression.left.accept(this, data), expression.right.accept(this, data)))
 
         return when (expression.operator) {
@@ -372,12 +373,6 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
             IrDynamicOperator.UNARY_MINUS -> prefixOperation(USub, expression, data)
 
             IrDynamicOperator.EXCL -> prefixOperation(Not, expression, data)
-
-//            IrDynamicOperator.PREFIX_INCREMENT -> prefixOperation(JsUnaryOperator.INC, expression, data)
-//            IrDynamicOperator.PREFIX_DECREMENT -> prefixOperation(JsUnaryOperator.DEC, expression, data)
-//
-//            IrDynamicOperator.POSTFIX_INCREMENT -> postfixOperation(JsUnaryOperator.INC, expression, data)
-//            IrDynamicOperator.POSTFIX_DECREMENT -> postfixOperation(JsUnaryOperator.DEC, expression, data)
 
             IrDynamicOperator.BINARY_PLUS -> binaryOperation(Add, expression, data)
             IrDynamicOperator.BINARY_MINUS -> binaryOperation(Sub, expression, data)
@@ -399,13 +394,6 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
             IrDynamicOperator.ANDAND -> binaryOperation(And, expression, data)
             IrDynamicOperator.OROR -> binaryOperation(Or, expression, data)
 
-//            IrDynamicOperator.EQ -> binaryOperation(JsBinaryOperator.ASG, expression, data)
-//            IrDynamicOperator.PLUSEQ -> binaryOperation(JsBinaryOperator.ASG_ADD, expression, data)
-//            IrDynamicOperator.MINUSEQ -> binaryOperation(JsBinaryOperator.ASG_SUB, expression, data)
-//            IrDynamicOperator.MULEQ -> binaryOperation(JsBinaryOperator.ASG_MUL, expression, data)
-//            IrDynamicOperator.DIVEQ -> binaryOperation(JsBinaryOperator.ASG_DIV, expression, data)
-//            IrDynamicOperator.MODEQ -> binaryOperation(JsBinaryOperator.ASG_MOD, expression, data)
-
             IrDynamicOperator.ARRAY_ACCESS -> Subscript(
                 value = expression.left.accept(this, data),
                 slice = expression.right.accept(this, data),
@@ -426,12 +414,16 @@ class IrElementToPyExpressionTransformer : BaseIrElementToPyNodeTransformer<expr
         }
     }
 
-    override fun visitComposite(expression: IrComposite, data: JsGenerationContext): expr {
+    override fun visitComposite(expression: IrComposite, data: PyGenerationContext): expr {
         // TODO
         return Name(id = identifier("visitComposite-inToPyExpressionTransformer $expression".toValidPythonSymbol()), ctx = Load)
     }
 
-    override fun visitRawFunctionReference(expression: IrRawFunctionReference, data: JsGenerationContext): expr {
+    override fun visitRawFunctionReference(expression: IrRawFunctionReference, data: PyGenerationContext): expr {
         return Name(id = identifier(expression.symbol.owner.name.asString().toValidPythonSymbol()), ctx = Load)
+    }
+
+    override fun visitFunctionReference(expression: IrFunctionReference, data: PyGenerationContext): expr {
+        return Name(id = identifier(expression.referencedName.asString().toValidPythonSymbol()), ctx = Load)
     }
 }

@@ -1,0 +1,145 @@
+# This file was generated using Kotlin DSL (.github/workflows/_generate_workflows.main.kts).
+# If you want to modify the workflow, please change the Kotlin file and regenerate this YAML file.
+# Generated with https://github.com/krzema12/github-actions-kotlin-dsl
+
+name: Generate reports
+
+on:
+  workflow_dispatch:
+
+jobs:
+  "check_yaml_consistency":
+    runs-on: "ubuntu-latest"
+    steps:
+      - id: step-0
+        name: Check out
+        uses: actions/checkout@v3
+      - id: step-1
+        name: Install Kotlin
+        run: sudo snap install --classic kotlin
+      - id: step-2
+        name: Execute script
+        run: rm '.github/workflows/generate_reports.yml' && '.github/workflows/_generate_workflows.main.kts'
+      - id: step-3
+        name: Consistency check
+        run: git diff --exit-code '.github/workflows/generate_reports.yml'
+  "generate_reports":
+    runs-on: "ubuntu-latest"
+    needs:
+      - "check_yaml_consistency"
+    strategy:
+      matrix:
+        testTask:
+          - pythonTest
+          - microPythonTest
+    steps:
+      - id: step-0
+        name: Fetch the whole git history (to be able to calculate some stats based on it)
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - id: step-1
+        name: Install Kotlin for scripting
+        run: sudo snap install --classic kotlin
+      - id: step-2
+        name: Install MicroPython
+        run: sudo snap install micropython
+        if: ${{ matrix.testTask == 'microPythonTest' }}
+      - id: step-3
+        name: Disable old Java for Kotlin
+        run: echo "kotlin.build.isObsoleteJdkOverrideEnabled=true" > local.properties
+      - id: step-4
+        name: Clean
+        run: JDK_9="$JAVA_HOME" ./gradlew clean
+      - id: step-5
+        name: Build
+        run: JDK_9="$JAVA_HOME" ./gradlew dist
+      - id: step-6
+        name: Compile python.kt to Python
+        run: |
+          dist/kotlinc/bin/kotlinc-py \
+          -libraries dist/kotlinc/lib/kotlin-stdlib-py-js.klib \
+          -Xir-produce-py \
+          -output python/experiments/generated/out_ir.py \
+          python/experiments/python.kt
+        if: ${{ matrix.testTask == 'pythonTest' }}
+      - id: step-7
+        name: Compile python.kt to JavaScript
+        run: |
+          dist/kotlinc/bin/kotlinc-js \
+          -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar \
+          -Xir-produce-js \
+          -Xir-property-lazy-initialization \
+          -output python/experiments/generated/out-ir.js \
+          python/experiments/python.kt
+        if: ${{ matrix.testTask == 'pythonTest' }}
+      - id: step-8
+        name: Generate stats about missing IR mapping
+        run: |
+          less python/experiments/generated/out_ir.py \
+          | grep -Po "visit[a-zA-Z0-9_]+" \
+          | sort \
+          | uniq -c \
+          | sort -nr \
+          > python/experiments/generated/missing.txt
+        if: ${{ matrix.testTask == 'pythonTest' }}
+      - id: step-9
+        name: Run end-to-end tests
+        run: JDK_9="$JAVA_HOME" python/e2e-tests/run.sh
+        if: ${{ matrix.testTask == 'pythonTest' }}
+      - id: step-10
+        name: Run box tests (succeed even if they fail)
+        run: JDK_9="$JAVA_HOME" ./gradlew :python:box.tests:${{ matrix.testTask }} || true
+      - id: step-11
+        name: Generate box tests reports
+        run: python/experiments/generate-box-tests-reports.main.kts --test-task=${{ matrix.testTask }}
+      - id: step-12
+        name: Upload common artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: common-artifact
+          path: |
+            python/box.tests/reports/git-history-plot.svg
+            python/experiments/generated
+        if: ${{ matrix.testTask == 'pythonTest' }}
+      - id: step-13
+        name: Upload ${{ matrix.testTask }} artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: ${{ matrix.testTask }}-artifact
+          path: python/box.tests/reports/${{ matrix.testTask }}
+  "update_reports":
+    runs-on: "ubuntu-latest"
+    needs:
+      - "generate_reports"
+      - "check_yaml_consistency"
+    steps:
+      - id: step-0
+        name: Check out
+        uses: actions/checkout@v2
+      - id: step-1
+        name: Download common artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: common-artifact
+          path: python
+      - id: step-2
+        name: Download pythonTest artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: pythonTest-artifact
+          path: python/box.tests/reports/pythonTest
+      - id: step-3
+        name: Download microPythonTest artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: microPythonTest-artifact
+          path: python/box.tests/reports/microPythonTest
+      - id: step-4
+        name: Commit and push
+        run: |
+          git config --global user.email "<>"
+          git config --global user.name "GitHub Actions Bot"
+          git add python/box.tests/reports python/experiments
+          git commit --allow-empty -m "Generate reports for $GITHUB_SHA"  # an empty commit explicitly shows that reports are up-to-date
+          git push

@@ -8,10 +8,8 @@ package org.jetbrains.kotlin.ir.backend.py.utils
 import org.jetbrains.kotlin.ir.declarations.IrAnnotationContainer
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationWithName
-import org.jetbrains.kotlin.ir.expressions.IrClassReference
 import org.jetbrains.kotlin.ir.expressions.IrConst
 import org.jetbrains.kotlin.ir.expressions.IrConstructorCall
-import org.jetbrains.kotlin.ir.symbols.IrClassSymbol
 import org.jetbrains.kotlin.ir.util.*
 import org.jetbrains.kotlin.name.FqName
 import org.jetbrains.kotlin.name.Name
@@ -25,7 +23,6 @@ object JsAnnotations {
     val jsNativeGetter = FqName("kotlin.js.nativeGetter")
     val jsNativeSetter = FqName("kotlin.js.nativeSetter")
     val jsNativeInvoke = FqName("kotlin.js.nativeInvoke")
-    val jsFunFqn = FqName("kotlin.js.JsFun")
 }
 
 @Suppress("UNCHECKED_CAST")
@@ -44,12 +41,6 @@ fun IrAnnotationContainer.getJsQualifier(): String? =
 fun IrAnnotationContainer.getJsName(): String? =
     getAnnotation(JsAnnotations.jsNameFqn)?.getSingleConstStringArgument()
 
-fun IrAnnotationContainer.getJsFunAnnotation(): String? =
-    getAnnotation(JsAnnotations.jsFunFqn)?.getSingleConstStringArgument()
-
-fun IrAnnotationContainer.isJsExport(): Boolean =
-    hasAnnotation(JsAnnotations.jsExportFqn)
-
 fun IrAnnotationContainer.isJsNativeGetter(): Boolean = hasAnnotation(JsAnnotations.jsNativeGetter)
 
 fun IrAnnotationContainer.isJsNativeSetter(): Boolean = hasAnnotation(JsAnnotations.jsNativeSetter)
@@ -66,9 +57,3 @@ private val associatedObjectKeyAnnotationFqName = FqName("kotlin.reflect.Associa
 
 val IrClass.isAssociatedObjectAnnotatedAnnotation: Boolean
     get() = isAnnotationClass && annotations.any { it.symbol.owner.constructedClass.fqNameWhenAvailable == associatedObjectKeyAnnotationFqName }
-
-fun IrConstructorCall.associatedObject(): IrClass? {
-    if (!symbol.owner.constructedClass.isAssociatedObjectAnnotatedAnnotation) return null
-    val klass = ((getValueArgument(0) as? IrClassReference)?.symbol as? IrClassSymbol)?.owner ?: return null
-    return if (klass.isObject) klass else null
-}

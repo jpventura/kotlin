@@ -5,57 +5,39 @@
 
 package org.jetbrains.kotlin.ir.backend.py
 
-import com.intellij.openapi.project.Project
-import org.jetbrains.kotlin.analyzer.AbstractAnalyzerWithCompilerReport
 import org.jetbrains.kotlin.backend.common.phaser.PhaseConfig
 import org.jetbrains.kotlin.backend.common.phaser.invokeToplevel
-import org.jetbrains.kotlin.config.CompilerConfiguration
 import org.jetbrains.kotlin.ir.backend.js.MainModule
+import org.jetbrains.kotlin.ir.backend.js.ModulesStructure
 import org.jetbrains.kotlin.ir.backend.js.loadIr
 import org.jetbrains.kotlin.ir.backend.py.lower.generateTests
 import org.jetbrains.kotlin.ir.backend.py.lower.moveBodilessDeclarationsToSeparatePlace
 import org.jetbrains.kotlin.ir.backend.py.transformers.irToPy.IrModuleToPyTransformer
-import org.jetbrains.kotlin.ir.backend.py.utils.NameTables
 import org.jetbrains.kotlin.ir.declarations.IrFactory
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
-import org.jetbrains.kotlin.ir.declarations.StageController
-import org.jetbrains.kotlin.ir.declarations.persistent.PersistentIrFactory
 import org.jetbrains.kotlin.ir.util.ExternalDependenciesGenerator
 import org.jetbrains.kotlin.ir.util.noUnboundLeft
-import org.jetbrains.kotlin.js.config.DceRuntimeDiagnostic
-import org.jetbrains.kotlin.library.KotlinLibrary
-import org.jetbrains.kotlin.library.resolver.KotlinLibraryResolveResult
 import org.jetbrains.kotlin.name.FqName
 
 class CompilerResult(
     val pyCode: PyCode?,
-    val dcePyCode: PyCode?,
 )
 
 class PyCode(val mainModule: String, val dependencies: Iterable<Pair<String, String>> = emptyList())
 
 fun compile(
-    project: Project,
-    mainModule: MainModule,
-    analyzer: AbstractAnalyzerWithCompilerReport,
-    configuration: CompilerConfiguration,
+    depsDescriptors: ModulesStructure,
     phaseConfig: PhaseConfig,
     irFactory: IrFactory,
-    allDependencies: KotlinLibraryResolveResult,
-    friendDependencies: List<KotlinLibrary>,
     mainArguments: List<String>?,
+    @Suppress("UNUSED_PARAMETER") // If this argument is removed, box tests fail at runtime.
     exportedDeclarations: Set<FqName> = emptySet(),
-    generateFullJs: Boolean = true,
-    generateDceJs: Boolean = false,
-    dceDriven: Boolean = false,
-    dceRuntimeDiagnostic: DceRuntimeDiagnostic? = null,
-    es6mode: Boolean = false,
-    multiModule: Boolean = false,
-    relativeRequirePath: Boolean = false,
-    propertyLazyInitialization: Boolean,
+    verifySignatures: Boolean = true,
 ): CompilerResult {
     val (moduleFragment: IrModuleFragment, dependencyModules, irBuiltIns, symbolTable, deserializer) =
-        loadIr(project, mainModule, analyzer, configuration, allDependencies, friendDependencies, irFactory)
+        loadIr(depsDescriptors, irFactory, verifySignatures)
+    val mainModule = depsDescriptors.mainModule
+    val configuration = depsDescriptors.compilerConfiguration
 
     val moduleDescriptor = moduleFragment.descriptor
 
@@ -64,16 +46,12 @@ fun compile(
         is MainModule.Klib -> dependencyModules
     }
 
-    val context = JsIrBackendContext(
+    val context = PyIrBackendContext(
         moduleDescriptor,
         irBuiltIns,
         symbolTable,
         allModules.first(),
-        exportedDeclarations,
         configuration,
-        es6mode = es6mode,
-        dceRuntimeDiagnostic = dceRuntimeDiagnostic,
-        propertyLazyInitialization = propertyLazyInitialization,
     )
 
     // Load declarations referenced during `context` initialization
@@ -90,49 +68,10 @@ fun compile(
     // TODO should be done incrementally
     generateTests(context, allModules.last())
 
-    if (dceDriven) {
-        val controller = MutableController(context, pirLowerings)
-
-        check(irFactory is PersistentIrFactory)
-        irFactory.stageController = controller
-
-        controller.currentStage = controller.lowerings.size + 1
-
-        eliminateDeadDeclarations(allModules, context)
-
-        irFactory.stageController = StageController(controller.currentStage)
-
-        val transformer = IrModuleToPyTransformer(
-            context,
-            mainArguments,
-            fullJs = true,
-            dceJs = false,
-            multiModule = multiModule,
-            relativeRequirePath = relativeRequirePath
-        )
-        return transformer.generateModule(allModules)
-    } else {
-        jsPhases.invokeToplevel(phaseConfig, context, allModules)
-        val transformer = IrModuleToPyTransformer(
-            context,
-            mainArguments,
-            fullJs = generateFullJs,
-            dceJs = generateDceJs,
-            multiModule = multiModule,
-            relativeRequirePath = relativeRequirePath
-        )
-        return transformer.generateModule(allModules)
-    }
-}
-
-fun generateJsCode(
-    context: JsIrBackendContext,
-    moduleFragment: IrModuleFragment,
-    nameTables: NameTables
-): String {
-    moveBodilessDeclarationsToSeparatePlace(context, moduleFragment)
-    jsPhases.invokeToplevel(PhaseConfig(jsPhases), context, listOf(moduleFragment))
-
-    val transformer = IrModuleToPyTransformer(context, null, true, nameTables)
-    return transformer.generateModule(listOf(moduleFragment)).pyCode!!.mainModule
+    pyPhases.invokeToplevel(phaseConfig, context, allModules)
+    val transformer = IrModuleToPyTransformer(
+        context,
+        mainArguments,
+    )
+    return transformer.generateModule(allModules)
 }

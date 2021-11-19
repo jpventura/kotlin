@@ -2,33 +2,11 @@
 
 The goal is to have Kotlin-Python interop, starting with being able to compile Kotlin to Python.
 
-See discussion at https://discuss.kotlinlang.org/t/idea-python-backend/19852
+Related:
 
-## Progress
-
-- [ ] Kotlin-Python interop
-  - [ ] compile Kotlin to Python
-    - [x] describe Python AST with Kotlin
-      - [x] create a generic tool that converts [ASDL](https://www.usenix.org/legacy/publications/library/proceedings/dsl97/full_papers/wang/wang.pdf) to Kotlin entities
-        - [x] create a parser of ASDL
-        - [x] create a generator of Kotlin entities from parsed ASDL
-        - [x] try to represent an example Python program, and fix any issues found
-      - [x] convert [Python's grammar in ASDL](https://github.com/python/cpython/blob/master/Parser/Python.asdl) into AST entities
-    - [ ] translate Kotlin IR to Python AST
-      - [x] translate IR items present in the simple Python AST example (assignment, list, for loop, function invocation...)
-      - [ ] move backend (Python IR -> AST mapping) logic to a separate module (don't piggy-back on JS stuff, like lowerings)
-      - [ ] move frontend to a separate module (don't piggy-back on JS stuff)
-      - [x] make a simple `fun hello() = "hello"` function translated and executable by Python (rest of the bundle at least parses fine by Python)
-      - [x] set up box tests infra
-      - [ ] translate all IR items
-      - [ ] make all existing box tests pass
-      - [ ] clean up before committing to master (if happens)
-      - ...
-    - [ ] generate Python code from Python AST
-      - [x] AST items used in the simple example (unblocking end-to-end PoC)
-      - [ ] all Python AST items
-  - [ ] use Python from Kotlin
-    - ...
+* Slack channels: [#python](https://kotlinlang.slack.com/archives/C01EY9ZF9B5) and [#python-contributors](https://kotlinlang.slack.com/archives/C0289CS37AS)
+* YouTrack issue: https://youtrack.jetbrains.com/issue/KT-34074
+* discussion at https://discuss.kotlinlang.org/t/idea-python-backend/19852
 
 ## How to try
 
@@ -47,13 +25,13 @@ All the commands should be called from the repository root.
 ### Compiling `out_ir.py` from `python.kt`
 
 ```shell script
-dist/kotlinc/bin/kotlinc-py -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -output python/experiments/out_ir.py python/experiments/python.kt
+dist/kotlinc/bin/kotlinc-py -libraries dist/kotlinc/lib/kotlin-stdlib-py-js.klib -Xir-produce-py -output python/experiments/generated/out_ir.py python/experiments/python.kt
 ```
 
 ### Generating stats about missing IR mapping
 
 ```shell script
-less python/experiments/out_ir.py | grep -Po "visit[a-zA-Z0-9_]+" | sort | uniq -c | sort -nr > python/experiments/missing.txt
+less python/experiments/generated/out_ir.py | grep -Po "visit[a-zA-Z0-9_]+" | sort | uniq -c | sort -nr > python/experiments/generated/missing.txt
 ```
 
 ### Compiling `out-ir.js` from `python.kt`
@@ -61,7 +39,7 @@ less python/experiments/out_ir.py | grep -Po "visit[a-zA-Z0-9_]+" | sort | uniq 
 To see how the same code is compiled to JS:
 
 ```shell script
-dist/kotlinc/bin/kotlinc-js -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -Xir-property-lazy-initialization -output python/experiments/out-ir.js python/experiments/python.kt
+dist/kotlinc/bin/kotlinc-js -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -Xir-property-lazy-initialization -output python/experiments/generated/out-ir.js python/experiments/python.kt
 ```
 
 ### Running fast tests
@@ -75,6 +53,8 @@ python/e2e-tests/run.sh  # e2e tests
 
 ```shell script
 ./gradlew :python:box.tests:pythonTest
+# or
+./gradlew :python:box.tests:microPythonTest
 ```
 
 To speed up tests:
@@ -82,7 +62,7 @@ To speed up tests:
 ```shell script
 # create ramdisk where temporary test py files are generated extensively:
 # don't forget to activate sudo before copy-pasting: sudo echo
-sudo mount -t tmpfs -o size=10G myramdisk python/py.translator/testData  # don't forget to clean this dir sometimes
+sudo mount -t tmpfs -o size=10G myramdisk python/py.translator/testData
 sudo mount -t tmpfs -o size=10G myramdisk1 /tmp
 
 mount | tail -n 2  # check it's mounted successfully
@@ -95,7 +75,9 @@ Setting `maxParallelForks` isn't required anymore since now Gradle parallelism i
 #### Generating reports
 
 ```shell script
-python/experiments/generate-box-tests-reports.main.kts
+JAVA_OPTS="-Xmx1G" python/experiments/generate-box-tests-reports.main.kts --test-task=pythonTest
+# or
+JAVA_OPTS="-Xmx1G" python/experiments/generate-box-tests-reports.main.kts --test-task=microPythonTest
 ```
 
 It will generate various reports and summaries:
@@ -108,11 +90,27 @@ It will generate various reports and summaries:
 
 #### Test stats
 
-![git-history-plot](experiments/git-history-plot.svg)
+![git-history-plot](box.tests/reports/git-history-plot.svg)
 
-Current status: **2156**/5787 passed
+Current status: **2463**/5970 passed
 
 #### History (newest on top)
+
+* after supporting static fields initialization: **2463**/5970 (+98: +102 passed, +4 failed because no support for unsigned numbers, chars, property delegates, any-to-string conversions)
+
+* after supporting integer multiplication: **2365**/5970 (+23)
+
+* after supporting internal array creation: **2342**/5970 (+29)
+
+* after supporting more reinterpret casts: **2313**/5970 (+47)
+
+* after supporting same-named local variables: **2266**/5970 (+12)
+
+* after partially fixing do-while: **2254**/5970 (+19)
+
+* after supporting function references: **2235**/5970 (+36)
+
+* after updating to Kotlin 1.6.0: **2199**/5970 (incomparable)
 
 * after supporting dynamic expressions (not statements): **2156**/5787 passed (+2)
 
@@ -186,11 +184,15 @@ Here are all the commands that update autogenerated files. Don't forget to execu
 ```shell script
 ./gradlew dist
 
-dist/kotlinc/bin/kotlinc-py -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -output python/experiments/out_ir.py python/experiments/python.kt
-less python/experiments/out_ir.py | grep -Po "visit[a-zA-Z0-9_]+" | sort | uniq -c | sort -nr > python/experiments/missing.txt
+dist/kotlinc/bin/kotlinc-py -libraries dist/kotlinc/lib/kotlin-stdlib-py-js.klib -Xir-produce-py -output python/experiments/generated/out_ir.py python/experiments/python.kt
+less python/experiments/generated/out_ir.py | grep -Po "visit[a-zA-Z0-9_]+" | sort | uniq -c | sort -nr > python/experiments/generated/missing.txt
 
-dist/kotlinc/bin/kotlinc-js -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -Xir-property-lazy-initialization -output python/experiments/out-ir.js python/experiments/python.kt
+dist/kotlinc/bin/kotlinc-js -libraries dist/kotlinc/lib/kotlin-stdlib-js.jar -Xir-produce-js -Xir-property-lazy-initialization -output python/experiments/generated/out-ir.js python/experiments/python.kt
 
 ./gradlew :python:box.tests:pythonTest
-python/experiments/generate-box-tests-reports.main.kts
+./gradlew :python:box.tests:microPythonTest
+JAVA_OPTS="-Xmx1G" python/experiments/generate-box-tests-reports.main.kts --test-task=pythonTest
+JAVA_OPTS="-Xmx1G" python/experiments/generate-box-tests-reports.main.kts --test-task=microPythonTest
 ```
+
+Also, you can skip any of the steps but invoke the [`Generate reports` GitHub action](../.github/workflows/generate_reports.yml) manually (see the ["Manually running a workflow" GitHub Documentation](https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow)). It will generate all the files for the specified branch and commit and push them. Since [generated commits don't trigger `push` workflows](https://docs.github.com/en/actions/learn-github-actions/events-that-trigger-workflows#triggering-new-workflows-using-a-personal-access-token), you will need to also invoke the [`Build and test` GitHub action](../.github/workflows/build_and_test.yml) if you want to make a generated commit green.

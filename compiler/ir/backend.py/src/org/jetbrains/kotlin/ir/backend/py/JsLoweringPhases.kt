@@ -19,43 +19,38 @@ import org.jetbrains.kotlin.ir.IrElement
 import org.jetbrains.kotlin.ir.backend.py.lower.*
 import org.jetbrains.kotlin.ir.backend.py.lower.calls.CallsLowering
 import org.jetbrains.kotlin.ir.backend.py.lower.cleanup.CleanupLowering
-import org.jetbrains.kotlin.ir.backend.py.lower.coroutines.JsSuspendFunctionsLowering
+import org.jetbrains.kotlin.ir.backend.py.lower.coroutines.PySuspendFunctionsLowering
 import org.jetbrains.kotlin.ir.backend.py.lower.inline.CopyInlineFunctionBodyLowering
 import org.jetbrains.kotlin.ir.backend.py.lower.inline.RemoveInlineDeclarationsWithReifiedTypeParametersLowering
-import org.jetbrains.kotlin.ir.backend.py.lower.inline.jsRecordExtractedLocalClasses
-import org.jetbrains.kotlin.ir.declarations.IrFile
+import org.jetbrains.kotlin.ir.backend.py.lower.inline.pyRecordExtractedLocalClasses
 import org.jetbrains.kotlin.ir.declarations.IrModuleFragment
 
-private fun DeclarationContainerLoweringPass.runOnFilesPostfix(files: Iterable<IrFile>) = files.forEach { runOnFilePostfix(it) }
-
-private fun ClassLoweringPass.runOnFilesPostfix(moduleFragment: IrModuleFragment) = moduleFragment.files.forEach { runOnFilePostfix(it) }
-
-private fun makeJsModulePhase(
-    lowering: (JsIrBackendContext) -> FileLoweringPass,
+private fun makePyModulePhase(
+    lowering: (PyIrBackendContext) -> FileLoweringPass,
     name: String,
     description: String,
-    prerequisite: Set<NamedCompilerPhase<JsIrBackendContext, *>> = emptySet()
-): NamedCompilerPhase<JsIrBackendContext, Iterable<IrModuleFragment>> = makeCustomJsModulePhase(
+    prerequisite: Set<NamedCompilerPhase<PyIrBackendContext, *>> = emptySet()
+): NamedCompilerPhase<PyIrBackendContext, Iterable<IrModuleFragment>> = makeCustomPyModulePhase(
     op = { context, modules -> lowering(context).lower(modules) },
     name = name,
     description = description,
     prerequisite = prerequisite
 )
 
-private fun makeCustomJsModulePhase(
-    op: (JsIrBackendContext, IrModuleFragment) -> Unit,
+private fun makeCustomPyModulePhase(
+    op: (PyIrBackendContext, IrModuleFragment) -> Unit,
     description: String,
     name: String,
-    prerequisite: Set<NamedCompilerPhase<JsIrBackendContext, *>> = emptySet()
-): NamedCompilerPhase<JsIrBackendContext, Iterable<IrModuleFragment>> = NamedCompilerPhase(
+    prerequisite: Set<NamedCompilerPhase<PyIrBackendContext, *>> = emptySet()
+): NamedCompilerPhase<PyIrBackendContext, Iterable<IrModuleFragment>> = NamedCompilerPhase(
     name = name,
     description = description,
     prerequisite = prerequisite,
-    lower = object : SameTypeCompilerPhase<JsIrBackendContext, Iterable<IrModuleFragment>> {
+    lower = object : SameTypeCompilerPhase<PyIrBackendContext, Iterable<IrModuleFragment>> {
         override fun invoke(
             phaseConfig: PhaseConfig,
             phaserState: PhaserState<Iterable<IrModuleFragment>>,
-            context: JsIrBackendContext,
+            context: PyIrBackendContext,
             input: Iterable<IrModuleFragment>
         ): Iterable<IrModuleFragment> {
             input.forEach { module ->
@@ -76,75 +71,71 @@ private fun <C> Action<IrElement, C>.toMultiModuleAction(): Action<Iterable<IrMo
 }
 
 sealed class Lowering(val name: String) {
-    abstract val modulePhase: NamedCompilerPhase<JsIrBackendContext, Iterable<IrModuleFragment>>
+    abstract val modulePhase: NamedCompilerPhase<PyIrBackendContext, Iterable<IrModuleFragment>>
 }
 
 class DeclarationLowering(
     name: String,
     description: String,
-    prerequisite: Set<NamedCompilerPhase<JsIrBackendContext, *>> = emptySet(),
-    private val factory: (JsIrBackendContext) -> DeclarationTransformer
+    prerequisite: Set<NamedCompilerPhase<PyIrBackendContext, *>> = emptySet(),
+    private val factory: (PyIrBackendContext) -> DeclarationTransformer
 ) : Lowering(name) {
-    fun declarationTransformer(context: JsIrBackendContext): DeclarationTransformer {
+    fun declarationTransformer(context: PyIrBackendContext): DeclarationTransformer {
         return factory(context)
     }
 
-    override val modulePhase = makeJsModulePhase(factory, name, description, prerequisite)
+    override val modulePhase = makePyModulePhase(factory, name, description, prerequisite)
 }
 
 class BodyLowering(
     name: String,
     description: String,
-    prerequisite: Set<NamedCompilerPhase<JsIrBackendContext, *>> = emptySet(),
-    private val factory: (JsIrBackendContext) -> BodyLoweringPass
+    prerequisite: Set<NamedCompilerPhase<PyIrBackendContext, *>> = emptySet(),
+    private val factory: (PyIrBackendContext) -> BodyLoweringPass
 ) : Lowering(name) {
-    fun bodyLowering(context: JsIrBackendContext): BodyLoweringPass {
-        return factory(context)
-    }
-
-    override val modulePhase = makeJsModulePhase(factory, name, description, prerequisite)
+    override val modulePhase = makePyModulePhase(factory, name, description, prerequisite)
 }
 
 class ModuleLowering(
     name: String,
-    override val modulePhase: NamedCompilerPhase<JsIrBackendContext, Iterable<IrModuleFragment>>
+    override val modulePhase: NamedCompilerPhase<PyIrBackendContext, Iterable<IrModuleFragment>>
 ) : Lowering(name)
 
 private fun makeDeclarationTransformerPhase(
-    lowering: (JsIrBackendContext) -> DeclarationTransformer,
+    lowering: (PyIrBackendContext) -> DeclarationTransformer,
     name: String,
     description: String,
     prerequisite: Set<Lowering> = emptySet()
 ) = DeclarationLowering(name, description, prerequisite.map { it.modulePhase }.toSet(), lowering)
 
 private fun makeBodyLoweringPhase(
-    lowering: (JsIrBackendContext) -> BodyLoweringPass,
+    lowering: (PyIrBackendContext) -> BodyLoweringPass,
     name: String,
     description: String,
     prerequisite: Set<Lowering> = emptySet()
 ) = BodyLowering(name, description, prerequisite.map { it.modulePhase }.toSet(), lowering)
 
-fun NamedCompilerPhase<JsIrBackendContext, Iterable<IrModuleFragment>>.toModuleLowering() = ModuleLowering(this.name, this)
+fun NamedCompilerPhase<PyIrBackendContext, Iterable<IrModuleFragment>>.toModuleLowering() = ModuleLowering(this.name, this)
 
-private val validateIrBeforeLowering = makeCustomJsModulePhase(
-    { context, module -> validationCallback(context, module) },
+private val validateIrBeforeLowering = makeCustomPyModulePhase(
+    ::validationCallback,
     name = "ValidateIrBeforeLowering",
     description = "Validate IR before lowering"
 ).toModuleLowering()
 
-private val validateIrAfterLowering = makeCustomJsModulePhase(
-    { context, module -> validationCallback(context, module) },
+private val validateIrAfterLowering = makeCustomPyModulePhase(
+    ::validationCallback,
     name = "ValidateIrAfterLowering",
     description = "Validate IR after lowering"
 ).toModuleLowering()
 
-val scriptRemoveReceiverLowering = makeJsModulePhase(
+val scriptRemoveReceiverLowering = makePyModulePhase(
     ::ScriptRemoveReceiverLowering,
     name = "ScriptRemoveReceiver",
     description = "Remove receivers for declarations in script"
 ).toModuleLowering()
 
-val createScriptFunctionsPhase = makeJsModulePhase(
+val createScriptFunctionsPhase = makePyModulePhase(
     ::CreateScriptFunctionsPhase,
     name = "CreateScriptFunctionsPhase",
     description = "Create functions for initialize and evaluate script"
@@ -186,12 +177,6 @@ private val stripTypeAliasDeclarationsPhase = makeDeclarationTransformerPhase(
     description = "Strip typealias declarations"
 )
 
-private val jsCodeOutliningPhase = makeBodyLoweringPhase(
-    ::JsCodeOutliningLowering,
-    name = "JsCodeOutliningLowering",
-    description = "Outline js() calls where JS code references Kotlin locals"
-)
-
 private val arrayConstructorPhase = makeBodyLoweringPhase(
     ::ArrayConstructorLowering,
     name = "ArrayConstructor",
@@ -218,7 +203,7 @@ private val localClassesInInlineFunctionsPhase = makeBodyLoweringPhase(
 )
 
 private val localClassesExtractionFromInlineFunctionsPhase = makeBodyLoweringPhase(
-    { context -> LocalClassesExtractionFromInlineFunctionsLowering(context, BackendContext::jsRecordExtractedLocalClasses) },
+    { context -> LocalClassesExtractionFromInlineFunctionsLowering(context, BackendContext::pyRecordExtractedLocalClasses) },
     name = "localClassesExtractionFromInlineFunctionsPhase",
     description = "Move local classes from inline functions into nearest declaration container",
     prerequisite = setOf(localClassesInInlineFunctionsPhase)
@@ -249,14 +234,7 @@ private val removeInlineDeclarationsWithReifiedTypeParametersLoweringPhase = mak
 )
 
 private val throwableSuccessorsLoweringPhase = makeBodyLoweringPhase(
-    { context ->
-        context.run {
-            val extendThrowableSymbol =
-                if (es6mode) setPropertiesToThrowableInstanceSymbol else extendThrowableSymbol
-
-            ThrowableLowering(this, extendThrowableSymbol)
-        }
-    },
+    ::ThrowableLowering,
     name = "ThrowableLowering",
     description = "Link kotlin.Throwable and JavaScript Error together to provide proper interop between language and platform exceptions"
 )
@@ -334,12 +312,6 @@ private val enumEntryRemovalLoweringPhase = makeDeclarationTransformerPhase(
     prerequisite = setOf(enumUsageLoweringPhase)
 )
 
-private val callableReferenceLowering = makeBodyLoweringPhase(
-    ::CallableReferenceLowering,
-    name = "CallableReferenceLowering",
-    description = "Build a lambda/callable reference class"
-)
-
 private val returnableBlockLoweringPhase = makeBodyLoweringPhase(
     ::ReturnableBlockLowering,
     name = "ReturnableBlockLowering",
@@ -357,18 +329,6 @@ private val forLoopsLoweringPhase = makeBodyLoweringPhase(
     ::ForLoopsLowering,
     name = "ForLoopsLowering",
     description = "[Optimization] For loops lowering"
-)
-
-private val propertyLazyInitLoweringPhase = makeBodyLoweringPhase(
-    ::PropertyLazyInitLowering,
-    name = "PropertyLazyInitLowering",
-    description = "Make property init as lazy"
-)
-
-private val removeInitializersForLazyProperties = makeDeclarationTransformerPhase(
-    ::RemoveInitializersForLazyProperties,
-    name = "RemoveInitializersForLazyProperties",
-    description = "Remove property initializers if they was initialized lazily"
 )
 
 private val propertyAccessorInlinerLoweringPhase = makeBodyLoweringPhase(
@@ -405,7 +365,7 @@ private val localDeclarationsLoweringPhase = makeBodyLoweringPhase(
 )
 
 private val localClassExtractionPhase = makeBodyLoweringPhase(
-    { context -> LocalClassPopupLowering(context, BackendContext::jsRecordExtractedLocalClasses) },
+    { context -> LocalClassPopupLowering(context, BackendContext::pyRecordExtractedLocalClasses) },
     name = "LocalClassExtractionPhase",
     description = "Move local declarations into nearest declaration container",
     prerequisite = setOf(localDeclarationsLoweringPhase)
@@ -431,7 +391,7 @@ private val innerClassConstructorCallsLoweringPhase = makeBodyLoweringPhase(
 )
 
 private val suspendFunctionsLoweringPhase = makeBodyLoweringPhase(
-    ::JsSuspendFunctionsLowering,
+    ::PySuspendFunctionsLowering,
     name = "SuspendFunctionsLowering",
     description = "Transform suspend functions into CoroutineImpl instance and build state machine"
 )
@@ -462,12 +422,11 @@ private val interopCallableReferenceLoweringPhase = makeBodyLoweringPhase(
         suspendFunctionsLoweringPhase,
         localDeclarationsLoweringPhase,
         localDelegatedPropertiesLoweringPhase,
-//        callableReferenceLowering
     )
 )
 
 private val defaultArgumentStubGeneratorPhase = makeDeclarationTransformerPhase(
-    ::JsDefaultArgumentStubGenerator,
+    ::PyDefaultArgumentStubGenerator,
     name = "DefaultArgumentStubGenerator",
     description = "Generate synthetic stubs for functions with default parameter values"
 )
@@ -499,17 +458,10 @@ private val exportedDefaultParameterStubPhase = makeDeclarationTransformerPhase(
     description = "Generates default stub for exported entity and renames the non-default counterpart"
 )
 
-private val jsDefaultCallbackGeneratorPhase = makeBodyLoweringPhase(
-    ::JsDefaultCallbackGenerator,
-    name = "JsDefaultCallbackGenerator",
+private val pyDefaultCallbackGeneratorPhase = makeBodyLoweringPhase(
+    ::PyDefaultCallbackGenerator,
+    name = "PyDefaultCallbackGenerator",
     description = "Build binding for super calls with default parameters"
-)
-
-private val varargLoweringPhase = makeBodyLoweringPhase(
-    ::VarargLowering,
-    name = "VarargLowering",
-    description = "Lower vararg arguments",
-    prerequisite = setOf(interopCallableReferenceLoweringPhase)
 )
 
 private val propertiesLoweringPhase = makeDeclarationTransformerPhase(
@@ -561,27 +513,27 @@ private val multipleCatchesLoweringPhase = makeBodyLoweringPhase(
 )
 
 private val errorExpressionLoweringPhase = makeBodyLoweringPhase(
-    ::JsErrorExpressionLowering,
+    ::PyErrorExpressionLowering,
     name = "errorExpressionLoweringPhase",
     description = "Transform error expressions into simple ir code",
     prerequisite = setOf(multipleCatchesLoweringPhase)
 )
 
 private val errorDeclarationLoweringPhase = makeDeclarationTransformerPhase(
-    ::JsErrorDeclarationLowering,
+    ::PyErrorDeclarationLowering,
     name = "errorDeclarationLoweringPhase",
     description = "Transform error declarations into simple ir code"
 )
 
 private val bridgesConstructionPhase = makeDeclarationTransformerPhase(
-    ::JsBridgesConstruction,
+    ::PyBridgesConstruction,
     name = "BridgesConstruction",
     description = "Generate bridges",
     prerequisite = setOf(suspendFunctionsLoweringPhase)
 )
 
 private val singleAbstractMethodPhase = makeBodyLoweringPhase(
-    ::JsSingleAbstractMethodLowering,
+    ::PySingleAbstractMethodLowering,
     name = "SingleAbstractMethod",
     description = "Replace SAM conversions with instances of interface-implementing classes"
 )
@@ -595,19 +547,6 @@ private val typeOperatorLoweringPhase = makeBodyLoweringPhase(
         removeInlineDeclarationsWithReifiedTypeParametersLoweringPhase,
         singleAbstractMethodPhase, errorExpressionLoweringPhase
     )
-)
-
-private val es6AddInternalParametersToConstructorPhase = makeBodyLoweringPhase(
-    ::ES6AddInternalParametersToConstructorPhase,
-    name = "ES6CreateInitFunctionPhase",
-    description = "Add `box` and `resultType` params, create init functions for constructors"
-)
-
-private val es6ConstructorLowering = makeBodyLoweringPhase(
-    ::ES6ConstructorLowering,
-    name = "ES6ConstructorLoweringPhase",
-    description = "Lower constructors",
-    prerequisite = setOf(es6AddInternalParametersToConstructorPhase)
 )
 
 private val secondaryConstructorLoweringPhase = makeDeclarationTransformerPhase(
@@ -654,9 +593,9 @@ private val autoboxingTransformerPhase = makeBodyLoweringPhase(
 )
 
 private val blockDecomposerLoweringPhase = makeBodyLoweringPhase(
-    ::JsBlockDecomposerLowering,
+    ::PyBlockDecomposerLowering,
     name = "BlockDecomposerLowering",
-    description = "Transform statement-like-expression nodes into pure-statement to make it easily transform into JS",
+    description = "Transform statement-like-expression nodes into pure-statement to make it easily transform into Py",
     prerequisite = setOf(typeOperatorLoweringPhase, suspendFunctionsLoweringPhase)
 )
 
@@ -676,12 +615,6 @@ private val callsLoweringPhase = makeBodyLoweringPhase(
     ::CallsLowering,
     name = "CallsLowering",
     description = "Handle intrinsics"
-)
-
-private val staticMembersLoweringPhase = makeDeclarationTransformerPhase(
-    ::StaticMembersLowering,
-    name = "StaticMembersLowering",
-    description = "Move static member declarations to top-level"
 )
 
 private val objectDeclarationLoweringPhase = makeDeclarationTransformerPhase(
@@ -715,12 +648,11 @@ private val cleanupLoweringPhase = makeBodyLoweringPhase(
     description = "Clean up IR before codegen"
 )
 
-private val loweringList = listOf<Lowering>(
+private val loweringList = listOf(
     scriptRemoveReceiverLowering,
     validateIrBeforeLowering,
     expectDeclarationsRemovingPhase,
     stripTypeAliasDeclarationsPhase,
-//    jsCodeOutliningPhase,
     arrayConstructorPhase,
     lateinitNullableFieldsPhase,
     lateinitDeclarationLoweringPhase,
@@ -733,7 +665,6 @@ private val loweringList = listOf<Lowering>(
     copyInlineFunctionBodyLoweringPhase,
     removeInlineDeclarationsWithReifiedTypeParametersLoweringPhase,
     createScriptFunctionsPhase,
-//    callableReferenceLowering,
     singleAbstractMethodPhase,
     tailrecLoweringPhase,
     enumClassConstructorLoweringPhase,
@@ -767,8 +698,6 @@ private val loweringList = listOf<Lowering>(
     rangeContainsLoweringPhase,
     forLoopsLoweringPhase,
     primitiveCompanionLoweringPhase,
-    propertyLazyInitLoweringPhase,
-    removeInitializersForLazyProperties,
     propertyAccessorInlinerLoweringPhase,
     copyPropertyAccessorBodiesLoweringPass,
     foldConstantLoweringPhase,
@@ -779,11 +708,8 @@ private val loweringList = listOf<Lowering>(
     defaultArgumentPatchOverridesPhase,
     defaultParameterInjectorPhase,
     defaultParameterCleanerPhase,
-    jsDefaultCallbackGeneratorPhase,
+    pyDefaultCallbackGeneratorPhase,
     throwableSuccessorsLoweringPhase,
-    es6AddInternalParametersToConstructorPhase,
-    es6ConstructorLowering,
-//    varargLoweringPhase,
     multipleCatchesLoweringPhase,
     errorExpressionLoweringPhase,
     errorDeclarationLoweringPhase,
@@ -806,15 +732,12 @@ private val loweringList = listOf<Lowering>(
     validateIrAfterLowering
 )
 
-// TODO comment? Eliminate ModuleLowering's? Don't filter them here?
-val pirLowerings = loweringList.filter { it is DeclarationLowering || it is BodyLowering } + staticMembersLoweringPhase
-
-val jsPhases = NamedCompilerPhase(
+val pyPhases = NamedCompilerPhase(
     name = "IrModuleLowering",
     description = "IR module lowering",
     lower = loweringList.map {
         @Suppress("USELESS_CAST")
-        it.modulePhase as CompilerPhase<JsIrBackendContext, Iterable<IrModuleFragment>, Iterable<IrModuleFragment>>
+        it.modulePhase as CompilerPhase<PyIrBackendContext, Iterable<IrModuleFragment>, Iterable<IrModuleFragment>>
     }.reduce { acc, lowering -> acc.then(lowering) },
     actions = setOf(defaultDumper.toMultiModuleAction(), validationAction.toMultiModuleAction()),
     nlevels = 1

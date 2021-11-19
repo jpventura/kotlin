@@ -7,28 +7,28 @@ package org.jetbrains.kotlin.ir.backend.py.lower
 
 import org.jetbrains.kotlin.backend.common.BodyLoweringPass
 import org.jetbrains.kotlin.ir.UNDEFINED_OFFSET
-import org.jetbrains.kotlin.ir.backend.py.JsIrBackendContext
+import org.jetbrains.kotlin.ir.backend.py.PyIrBackendContext
 import org.jetbrains.kotlin.ir.declarations.IrClass
 import org.jetbrains.kotlin.ir.declarations.IrDeclaration
 import org.jetbrains.kotlin.ir.declarations.IrDeclarationParent
 import org.jetbrains.kotlin.ir.expressions.*
-import org.jetbrains.kotlin.ir.expressions.impl.*
-import org.jetbrains.kotlin.ir.symbols.IrSimpleFunctionSymbol
+import org.jetbrains.kotlin.ir.expressions.impl.IrCallImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrConstImpl
+import org.jetbrains.kotlin.ir.expressions.impl.IrGetValueImpl
 import org.jetbrains.kotlin.ir.types.isNullableString
 import org.jetbrains.kotlin.ir.types.makeNotNull
-import org.jetbrains.kotlin.ir.util.*
+import org.jetbrains.kotlin.ir.util.file
+import org.jetbrains.kotlin.ir.util.isThrowable
+import org.jetbrains.kotlin.ir.util.parentClassOrNull
 import org.jetbrains.kotlin.ir.visitors.IrElementTransformer
 
 
-class ThrowableLowering(
-    val context: JsIrBackendContext,
-    val extendThrowableFunction: IrSimpleFunctionSymbol
-) : BodyLoweringPass {
+class ThrowableLowering(val context: PyIrBackendContext) : BodyLoweringPass {
     private val nothingNType = context.irBuiltIns.nothingNType
 
     private val throwableConstructors = context.throwableConstructors
     private val newThrowableFunction = context.newThrowableSymbol
-    private val jsUndefined = context.intrinsics.jsUndefined.symbol
+    private val jsUndefined = context.intrinsics.jsUndefined
 
     fun nullValue(): IrExpression = IrConstImpl.constNull(UNDEFINED_OFFSET, UNDEFINED_OFFSET, nothingNType)
     fun undefinedValue(): IrExpression = IrCallImpl(UNDEFINED_OFFSET, UNDEFINED_OFFSET, nothingNType, jsUndefined, 0, 0)
@@ -96,7 +96,7 @@ class ThrowableLowering(
 
             return expression.run {
                 IrCallImpl(
-                    startOffset, endOffset, type, extendThrowableFunction,
+                    startOffset, endOffset, type, context.extendThrowableSymbol,
                     valueArgumentsCount = 3,
                     typeArgumentsCount = 0
                 ).also {

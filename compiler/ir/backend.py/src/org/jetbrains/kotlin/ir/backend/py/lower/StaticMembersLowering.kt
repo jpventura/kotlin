@@ -6,13 +6,13 @@
 package org.jetbrains.kotlin.ir.backend.py.lower
 
 import org.jetbrains.kotlin.backend.common.DeclarationTransformer
-import org.jetbrains.kotlin.ir.backend.py.JsCommonBackendContext
+import org.jetbrains.kotlin.ir.backend.py.PyCommonBackendContext
 import org.jetbrains.kotlin.ir.declarations.*
 import org.jetbrains.kotlin.ir.util.file
 import org.jetbrains.kotlin.ir.util.isEffectivelyExternal
 
 // Move static member declarations from classes to top level
-class StaticMembersLowering(val context: JsCommonBackendContext) : DeclarationTransformer {
+class StaticMembersLowering(val context: PyCommonBackendContext) : DeclarationTransformer {
     override fun transformFlat(declaration: IrDeclaration): List<IrDeclaration>? {
         (declaration.parent as? IrClass)?.let { irClass ->
             val isStatic = when (declaration) {
@@ -25,9 +25,6 @@ class StaticMembersLowering(val context: JsCommonBackendContext) : DeclarationTr
             if (isStatic) {
                 // JsExport might be inherited from parent declaration which would be broken if we move it out of its parent.
                 // Marking declaration as exported explicitly.
-//                if (context is JsIrBackendContext && declaration.isExported(context)) {
-//                    context.additionalExportedDeclarations.add(declaration)
-//                }
                 var extractedUnder = declaration
                 var newContainer = declaration.parent
                 while (newContainer is IrDeclaration && newContainer != irClass.file) {

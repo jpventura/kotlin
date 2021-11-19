@@ -11,38 +11,47 @@ import java.io.InputStreamReader
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.TimeUnit
+import kotlin.io.path.copyTo
+import kotlin.io.path.writeText
 import kotlin.system.measureTimeMillis
 
 class PythonExecutionException(override val message: String) : RuntimeException(message)
 
 object PythonTestChecker {
 
-    fun check(files: List<String>, expectedResult: String) {
-        val actualResult = run(files)
-        assertEquals(expectedResult, actualResult)
+    const val EXPECTED_RESULT = "OK"
+
+    fun check(generatedPyFilePath: String) {
+        val actualResult = run(generatedPyFilePath)
+        assertEquals(EXPECTED_RESULT, actualResult)
     }
 
-    private fun run(files: List<String>): Any {
-        assert(files.size == 1) { "For now the test checker supports a single output from the compiler!" }
-        val fileToRun = files[0]
-        val pathToFileToRun = Paths.get(fileToRun)
+    private fun run(generatedPyFilePath: String): Any {
+        val generatedPyFile = Paths.get(generatedPyFilePath)
 
-        val temporaryDirectory = Files.createTempDirectory(pathToFileToRun.parent, pathToFileToRun.fileName.toString())
-        Files.copy(pathToFileToRun, temporaryDirectory.resolve("compiled_module.py"))
-        val consumerScriptPath = temporaryDirectory.resolve("consumer.py")
-        consumerScriptPath.toFile().writeText("""
-            from compiled_module import box
+        val temporaryDirectory = Files.createTempDirectory(generatedPyFile.parent, generatedPyFile.fileName.toString())
+        try {
+            generatedPyFile.copyTo(temporaryDirectory.resolve("compiled_module.py"))
+            val consumerScriptPath = temporaryDirectory.resolve("consumer.py")
+            consumerScriptPath.writeText(
+                """
+                    from compiled_module import box
+        
+                    print(box())
+                """.trimIndent()
+            )
 
-            print(box())
-        """.trimIndent())
-
-        val pythonOutput = runPython(consumerScriptPath.toString())
-        temporaryDirectory.toFile().deleteRecursively()
-        return pythonOutput
+            return runPython(consumerScriptPath.toString())
+        } finally {
+            temporaryDirectory.toFile().deleteRecursively()
+        }
     }
 
     private fun runPython(scriptPath: String): String {
-        val process = Runtime.getRuntime().exec("python3.8 $scriptPath")
+        val interpreterBinary = requireNotNull(System.getProperty("kotlin.py.interpreter.binary")) {
+            "Python interpreter binary is not set! It should be set by the build logic."
+        }
+        val process = Runtime.getRuntime().exec("$interpreterBinary $scriptPath")
         val runningTime = measureTimeMillis {
             process.waitFor(10, TimeUnit.SECONDS)
         }
